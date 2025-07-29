@@ -1,40 +1,41 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
+import numpy as np
+import torch
+import io
 import time
-import os
 
-app = Flask(__name__)
-model = YOLO("mix(320x160).pt")  # โหลดจาก Ultralytics
+app = FastAPI()
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'image' not in request.files:
-        return jsonify({"error": "No image uploaded"}), 400
+# Load model (ต้องแนบไฟล์ yolov10.pt ด้วย)
+model = YOLO("yolov10.pt")
 
-    img = Image.open(request.files['image'].stream).convert("RGB")
+def preprocess_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img_resized = img.resize((320, 160))  # Resize to match training
+    img_np = np.array(img_resized).astype("float32") / 255.0
+    img_np = np.transpose(img_np, (2, 0, 1))  # HWC → CHW
+    tensor = torch.tensor(img_np).unsqueeze(0)
+    return tensor
 
-    t1 = time.time()
-    results = model(img)
-    t2 = time.time()
+@app.post("/detect")
+async def detect(image: UploadFile = File(...)):
+    start = time.time()
 
-    detections = results[0].boxes.xyxy.cpu().tolist()
-    confidences = results[0].boxes.conf.cpu().tolist()
-    classes = results[0].boxes.cls.cpu().tolist()
+    try:
+        image_bytes = await image.read()
+        input_tensor = preprocess_image(image_bytes)
 
-    data = []
-    for xyxy, conf, cls in zip(detections, confidences, classes):
-        data.append({
-            "bbox": xyxy,
-            "confidence": round(conf, 2),
-            "class_id": int(cls)
+        results = model(input_tensor)
+        confs = results[0].boxes.conf.cpu().tolist()
+
+        rtt = round((time.time() - start) * 1000, 2)
+        return JSONResponse(content={
+            "RTT_ms": rtt,
+            "confidences": confs,
+            "num_detections": len(confs)
         })
-
-    return jsonify({
-        "inference_time_ms": round((t2 - t1) * 1000, 2),
-        "results": data
-    })
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
