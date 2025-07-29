@@ -10,7 +10,7 @@ import time
 app = FastAPI()
 
 # Load model (ต้องแนบไฟล์ yolov10.pt ด้วย)
-model = YOLO("yolov10.pt")
+model = YOLO("mix(320x160).pt")
 
 def preprocess_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
